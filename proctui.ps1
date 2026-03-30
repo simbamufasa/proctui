@@ -61,7 +61,6 @@ $script:statusMsg       = ''
 $script:statusTime      = [datetime]::MinValue
 $script:lastRefresh     = [datetime]::MinValue
 $script:refreshInterval = 3
-$script:needsFullRedraw = $true
 $script:dirty          = $true
 $script:lastWidth      = 0
 $script:lastHeight     = 0
@@ -441,7 +440,7 @@ function Draw-Screen($data) {
     # -- Help Bar (last row, no trailing newline) --
     $filterLabel = if ($script:filterText) { " | Filter: $($script:filterText)" } else { '' }
     $portLabel = if ($script:portFilter) { " | Port: $($script:portFilter)" } else { '' }
-    $listenLabel = if ($script:listenView) { ' | Listen' } else { '' }
+    $listenLabel = if ($script:listenView) { " | View: Listeners" } else { '' }
     $help = " Up/Dn Navigate | Enter/K Stop | / Filter | S Sort | R Refresh | A Addrs | P Port | L Listen | Q Quit$filterLabel$portLabel$listenLabel"
     BufLine $buf $help $cTitle 'DarkBlue' -NoNewline
 
@@ -517,7 +516,7 @@ function Show-Addresses($item) {
     Write-Host "Press any key to close" -ForegroundColor $cHelp -NoNewline
 
     [Console]::ReadKey($true) | Out-Null
-    $script:needsFullRedraw = $true
+    $script:dirty = $true
 }
 
 # -- Filter Input ------------------------------------------------
@@ -776,8 +775,9 @@ try {
 
         # -- Confirm Kill --
         if ($script:confirmKill) {
+            $sel = $data[$script:selectedIndex]
+            if (-not $sel) { $script:confirmKill = $false; continue }
             if ($key.KeyChar -eq 'y' -or $key.KeyChar -eq 'Y') {
-                $sel = $data[$script:selectedIndex]
                 try {
                     Stop-Process -Id $sel.PID -Force -ErrorAction Stop
                     $script:statusMsg  = "X Killed '$($sel.Name)' (PID $($sel.PID))"
@@ -792,7 +792,6 @@ try {
                 }
             }
             elseif ($key.KeyChar -eq 't' -or $key.KeyChar -eq 'T') {
-                $sel = $data[$script:selectedIndex]
                 $tree = Get-ProcessTree $sel.PID
                 $killed = 0
                 $failed = 0
@@ -822,31 +821,23 @@ try {
         # -- Keys --
         switch ($key.Key) {
             'UpArrow'   { $script:selectedIndex = [math]::Max(0, $script:selectedIndex - 1) }
-            'DownArrow' { $script:selectedIndex = [math]::Min($data.Count - 1, $script:selectedIndex + 1) }
+            'DownArrow' { if ($data.Count -gt 0) { $script:selectedIndex = [math]::Min($data.Count - 1, $script:selectedIndex + 1) } }
             'PageUp'    { $script:selectedIndex = [math]::Max(0, $script:selectedIndex - 10) }
-            'PageDown'  { $script:selectedIndex = [math]::Min($data.Count - 1, $script:selectedIndex + 10) }
+            'PageDown'  { if ($data.Count -gt 0) { $script:selectedIndex = [math]::Min($data.Count - 1, $script:selectedIndex + 10) } }
             'Home'      { $script:selectedIndex = 0 }
-            'End'       { $script:selectedIndex = $data.Count - 1 }
+            'End'       { if ($data.Count -gt 0) { $script:selectedIndex = $data.Count - 1 } }
             'Enter'     { if ($data.Count -gt 0) { $script:confirmKill = $true } }
             default {
-                switch ($key.KeyChar) {
+                switch ([char]::ToLower($key.KeyChar)) {
                     'k' { if ($data.Count -gt 0) { $script:confirmKill = $true } }
-                    'K' { if ($data.Count -gt 0) { $script:confirmKill = $true } }
                     '/' { Enter-FilterMode; $data = Apply-SortFilter $script:bgRawData }
                     's' { Cycle-Sort; $data = Apply-SortFilter $script:bgRawData }
-                    'S' { Cycle-Sort; $data = Apply-SortFilter $script:bgRawData }
                     'r' { $script:bgRawData = @(& $script:fetchScript)
                           $script:lastRefresh = [datetime]::Now
                           $data = Apply-SortFilter $script:bgRawData
                           $script:statusMsg = "~ Refreshed"; $script:statusTime = [datetime]::Now }
-                    'R' { $script:bgRawData = @(& $script:fetchScript)
-                          $script:lastRefresh = [datetime]::Now
-                          $data = Apply-SortFilter $script:bgRawData
-                          $script:statusMsg = "~ Refreshed"; $script:statusTime = [datetime]::Now }
                     'a' { if ($data.Count -gt 0) { Show-Addresses $data[$script:selectedIndex] } }
-                    'A' { if ($data.Count -gt 0) { Show-Addresses $data[$script:selectedIndex] } }
                     'p' { Enter-PortMode; $data = Apply-SortFilter $script:bgRawData }
-                    'P' { Enter-PortMode; $data = Apply-SortFilter $script:bgRawData }
                     'l' {
                         $script:listenView = -not $script:listenView
                         if ($script:listenView) {
@@ -865,26 +856,7 @@ try {
                         $script:scrollOffset = 0
                         $data = Apply-SortFilter $script:bgRawData
                     }
-                    'L' {
-                        $script:listenView = -not $script:listenView
-                        if ($script:listenView) {
-                            $script:prevSortColumn = $script:sortColumn
-                            $script:prevSortAsc    = $script:sortAsc
-                            $script:sortColumn     = 'PID'
-                            $script:sortAsc        = $true
-                            $script:statusMsg      = "View: Listeners only"
-                        } else {
-                            $script:sortColumn = $script:prevSortColumn
-                            $script:sortAsc    = $script:prevSortAsc
-                            $script:statusMsg  = "View: All processes"
-                        }
-                        $script:statusTime = [datetime]::Now
-                        $script:selectedIndex = 0
-                        $script:scrollOffset = 0
-                        $data = Apply-SortFilter $script:bgRawData
-                    }
                     'q' { return }
-                    'Q' { return }
                 }
             }
         }
