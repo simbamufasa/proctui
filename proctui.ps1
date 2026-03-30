@@ -191,24 +191,15 @@ function Get-NetProcesses {
 }
 
 # -- Buffered Rendering ------------------------------------------
-# Write a full line at row Y, padded to screen width. No Clear needed.
-function Write-Line([int]$y, [string]$text, $fg = 'Gray', $bg = $null) {
+function BufLine([System.Text.StringBuilder]$buf, [string]$text, [string]$fg, [string]$bg, [switch]$NoNewline) {
     $w = [Console]::WindowWidth
-    if ($y -lt 0 -or $y -ge [Console]::BufferHeight) { return }
     $padded = $text
     if ($padded.Length -lt $w) { $padded = $padded + (' ' * ($w - $padded.Length)) }
     elseif ($padded.Length -gt $w) { $padded = $padded.Substring(0, $w) }
-    [Console]::SetCursorPosition(0, $y)
-    if ($bg) { Write-Host $padded -ForegroundColor $fg -BackgroundColor $bg -NoNewline }
-    else     { Write-Host $padded -ForegroundColor $fg -NoNewline }
-}
-
-# Write colored segment at specific position (for state column overlay)
-function Write-Seg([int]$x, [int]$y, [string]$text, $fg = 'Gray') {
-    if ($y -lt 0 -or $y -ge [Console]::BufferHeight) { return }
-    if ($x -lt 0) { $x = 0 }
-    [Console]::SetCursorPosition($x, $y)
-    Write-Host $text -ForegroundColor $fg -NoNewline
+    [void]$buf.Append((Ansi $fg $bg))
+    [void]$buf.Append($padded)
+    [void]$buf.Append($cReset)
+    if (-not $NoNewline) { [void]$buf.Append("`n") }
 }
 
 function Pad([string]$s, [int]$len) {
@@ -232,20 +223,23 @@ function Draw-Screen($data) {
     $count = 0
     if ($data) { $count = $data.Count }
 
+    $buf = [System.Text.StringBuilder]::new($w * $h * 2)
+    [void]$buf.Append("$ESC[H")  # cursor home
+
     # -- Row 0: Title Bar --
     $title = "  [*] ProcNet TUI -- $count network processes "
     $ts    = " $(Get-Date -Format 'HH:mm:ss') "
     $gap   = $w - $title.Length - $ts.Length
     if ($gap -lt 0) { $gap = 0 }
-    Write-Line 0 "$title$(' ' * $gap)$ts" $cTitle 'DarkCyan'
+    BufLine $buf "$title$(' ' * $gap)$ts" $cTitle 'DarkCyan'
 
     # -- Row 1: blank spacer --
-    Write-Line 1 '' $cBorder
+    BufLine $buf '' $cBorder
 
     # -- Row 2: Column Headers --
     $sortInd = if ($script:sortAsc) { '^' } else { 'v' }
-    $addrW = $w - 8 - 20 - 6 - 14 - 9 - 10 - 2
-    if ($addrW -lt 10) { $addrW = 10 }
+    $cmdW = $w - 8 - 20 - 6 - 14 - 9 - 10 - 2
+    if ($cmdW -lt 10) { $cmdW = 10 }
     $cols = @(
         @{ Name='PID';     W=8;  Key='PID' },
         @{ Name='PROCESS'; W=20; Key='Name' },
@@ -253,7 +247,7 @@ function Draw-Screen($data) {
         @{ Name='STATE';   W=14; Key='State' },
         @{ Name='CPU(s)';  W=9;  Key='CPU' },
         @{ Name='MEM(MB)'; W=10; Key='MemMB' },
-        @{ Name='PORTS';   W=$addrW; Key='TopAddr' }
+        @{ Name='CMD';     W=$cmdW; Key='CmdLine' }
     )
 
     $headerLine = ''
@@ -261,20 +255,22 @@ function Draw-Screen($data) {
         $label = if ($c.Key -eq $script:sortColumn) { "$($c.Name)$sortInd" } else { $c.Name }
         $headerLine += Pad " $label" $c.W
     }
-    Write-Line 2 $headerLine 'White' 'DarkBlue'
+    BufLine $buf $headerLine 'White' 'DarkBlue'
 
     # -- Row 3: separator --
-    Write-Line 3 ('-' * $w) $cBorder
+    BufLine $buf ('-' * $w) $cBorder
 
-    # -- Rows 4..(h-6): Table Body --
+    # -- Rows 4..(h-8): Table Body --
     $bodyStart = 4
-    $bodyEnd   = $h - 6
+    $bodyEnd   = $h - 8
     $maxRows   = $bodyEnd - $bodyStart
     if ($maxRows -lt 1) { $maxRows = 1 }
 
+    $stateColOffset = 34  # 8 + 20 + 6
+
     if ($count -eq 0) {
-        Write-Line ($bodyStart) "  No network processes found. Try running as Administrator."  'DarkYellow'
-        for ($r = $bodyStart + 1; $r -lt $bodyEnd; $r++) { Write-Line $r '' }
+        BufLine $buf "  No network processes found. Try running as Administrator." 'DarkYellow'
+        for ($r = $bodyStart + 1; $r -lt $bodyEnd; $r++) { BufLine $buf '' 'Gray' }
     } else {
         # Clamp
         if ($script:selectedIndex -ge $count) { $script:selectedIndex = $count - 1 }
@@ -288,19 +284,19 @@ function Draw-Screen($data) {
 
         for ($i = 0; $i -lt $maxRows; $i++) {
             $dataIdx = $i + $script:scrollOffset
-            $row = $bodyStart + $i
 
             if ($dataIdx -ge $count) {
-                Write-Line $row ''
+                BufLine $buf '' 'Gray'
                 continue
             }
 
             $item = $data[$dataIdx]
             $isSelected = ($dataIdx -eq $script:selectedIndex)
 
-            $addr = $item.TopAddr
-            if ($addr.Length -gt ($addrW - 2)) {
-                $addr = $addr.Substring(0, $addrW - 4) + '...'
+            $cmd = if ($item.CmdLine) { $item.CmdLine } else { $item.TopAddr }
+            if (-not $cmd) { $cmd = '--' }
+            if ($cmd.Length -gt ($cmdW - 2)) {
+                $cmd = $cmd.Substring(0, $cmdW - 4) + '...'
             }
 
             $line = (PadNum $item.PID 7) + ' ' +
@@ -309,39 +305,53 @@ function Draw-Screen($data) {
                     (Pad $item.State 14) +
                     (PadNum $item.CPU 8) + ' ' +
                     (PadNum $item.MemMB 9) + ' ' +
-                    (Pad $addr $addrW)
+                    (Pad $cmd $cmdW)
 
             if ($isSelected) {
-                Write-Line $row $line $cSelected $cSelBg
+                BufLine $buf $line $cSelected $cSelBg
             } else {
-                Write-Line $row $line 'Gray'
-                # Overlay state with color
+                # Build the row with colored state inline
+                # Pad the full line to width $w
+                $padded = $line
+                if ($padded.Length -lt $w) { $padded = $padded + (' ' * ($w - $padded.Length)) }
+                elseif ($padded.Length -gt $w) { $padded = $padded.Substring(0, $w) }
+
+                $beforeState = $padded.Substring(0, $stateColOffset)
+                $stateText = $padded.Substring($stateColOffset, 14)
+                $afterState = $padded.Substring($stateColOffset + 14)
+
                 $stateColor = switch ($item.State) {
                     'Established' { $cEstab }
                     'Listen'      { $cListen }
                     default       { $cOther }
                 }
-                $statePos = 8 + 20 + 6
-                Write-Seg $statePos $row (Pad $item.State 14) $stateColor
-                # Overlay address with color: green for LISTEN ports, yellow for remotes
-                $addrPos = 8 + 20 + 6 + 14 + 9 + 10
-                if ($addr -match 'LISTEN:') {
-                    Write-Seg $addrPos $row (Pad $addr $addrW) $cListen
-                } elseif ($addr -match '->') {
-                    Write-Seg $addrPos $row (Pad $addr $addrW) $cEstab
-                }
+
+                [void]$buf.Append((Ansi 'Gray'))
+                [void]$buf.Append($beforeState)
+                [void]$buf.Append($cReset)
+                [void]$buf.Append((Ansi $stateColor))
+                [void]$buf.Append($stateText)
+                [void]$buf.Append($cReset)
+                [void]$buf.Append((Ansi 'Gray'))
+                [void]$buf.Append($afterState)
+                [void]$buf.Append($cReset)
+                [void]$buf.Append("`n")
             }
         }
     }
 
     # -- Detail Pane --
-    $detailY = $bodyEnd
-    Write-Line $detailY ('=' * $w) $cBorder
+    BufLine $buf ('=' * $w) $cBorder
 
     $sel = if ($count -gt 0) { $data[$script:selectedIndex] } else { $null }
 
     if ($sel) {
-        Write-Line ($detailY + 1) " >> $($sel.Name) (PID $($sel.PID)) -- $($sel.Connections) connection(s)" 'White'
+        # Info row with parent info
+        $parentInfo = ''
+        if ($sel.ParentName -and $sel.ParentName -ne '--') {
+            $parentInfo = "  |  Parent: $($sel.ParentName) (PID $($sel.ParentPID))"
+        }
+        BufLine $buf " >> $($sel.Name) (PID $($sel.PID)) -- $($sel.Connections) connection(s)$parentInfo" 'White'
 
         $addrLines = @($sel.Addresses | Select-Object -First 2)
         for ($a = 0; $a -lt 2; $a++) {
@@ -349,47 +359,52 @@ function Draw-Screen($data) {
                 $aColor = if ($addrLines[$a] -match 'Established') { $cEstab }
                           elseif ($addrLines[$a] -match 'Listen') { $cListen }
                           else { $cOther }
-                Write-Line ($detailY + 2 + $a) "   $($addrLines[$a])" $aColor
+                BufLine $buf "   $($addrLines[$a])" $aColor
             } else {
-                Write-Line ($detailY + 2 + $a) ''
+                BufLine $buf '' 'Gray'
             }
         }
         if ($sel.Addresses.Count -gt 2) {
-            Write-Line ($detailY + 4) "   ... +$($sel.Addresses.Count - 2) more (press A)" $cBorder
+            BufLine $buf "   ... +$($sel.Addresses.Count - 2) more (press A)" $cBorder
         } else {
-            Write-Line ($detailY + 4) ''
+            BufLine $buf '' 'Gray'
         }
     } else {
-        for ($r = $detailY + 1; $r -le $detailY + 4; $r++) { Write-Line $r '' }
+        for ($r = 0; $r -lt 4; $r++) { BufLine $buf '' 'Gray' }
     }
 
     # -- Status line --
-    $statusY = $h - 2
     if ($script:statusMsg -and ([datetime]::Now - $script:statusTime).TotalSeconds -lt 4) {
         $statusColor = if ($script:statusMsg -match 'Killed|Stopped') { $cDanger } else { $cHelp }
-        Write-Line $statusY "  $($script:statusMsg)" $statusColor
+        BufLine $buf "  $($script:statusMsg)" $statusColor
     } else {
-        Write-Line $statusY ''
+        BufLine $buf '' 'Gray'
     }
 
-    # -- Confirm Kill overlay --
+    # -- Help Bar (last row, no trailing newline) --
+    $filterLabel = if ($script:filterText) { " | Filter: $($script:filterText)" } else { '' }
+    $portLabel = if ($script:portFilter) { " | Port: $($script:portFilter)" } else { '' }
+    $listenLabel = if ($script:listenView) { ' | Listen' } else { '' }
+    $help = " Up/Dn Navigate | Enter/K Stop | / Filter | S Sort | R Refresh | A Addrs | P Port | L Listen | Q Quit$filterLabel$portLabel$listenLabel"
+    BufLine $buf $help $cTitle 'DarkBlue' -NoNewline
+
+    # Flush the entire buffer at once
+    [Console]::Out.Write($buf.ToString())
+
+    # -- Confirm Kill overlay (after main buffer flush) --
     if ($script:confirmKill -and $sel) {
         $cy = [math]::Floor($h / 2) - 1
-        $box = "  !!  Stop '$($sel.Name)' (PID $($sel.PID))?  [Y]es / [N]o  "
+        $box = "  !!  Stop '$($sel.Name)' (PID $($sel.PID))?  [Y] Process | [T] Tree | [N] Cancel  "
         $bpad = [math]::Max(0, [math]::Floor(($w - $box.Length - 2) / 2))
         $blank = ' ' * ($box.Length + 2)
+        $dangerAnsi = Ansi 'White' 'DarkRed'
         [Console]::SetCursorPosition($bpad, $cy)
-        Write-Host $blank -ForegroundColor White -BackgroundColor DarkRed -NoNewline
+        [Console]::Write("$dangerAnsi$blank$cReset")
         [Console]::SetCursorPosition($bpad, $cy + 1)
-        Write-Host " $box " -ForegroundColor White -BackgroundColor DarkRed -NoNewline
+        [Console]::Write("$dangerAnsi $box $cReset")
         [Console]::SetCursorPosition($bpad, $cy + 2)
-        Write-Host $blank -ForegroundColor White -BackgroundColor DarkRed -NoNewline
+        [Console]::Write("$dangerAnsi$blank$cReset")
     }
-
-    # -- Help Bar (last row) --
-    $filterLabel = if ($script:filterText) { " | Filter: $($script:filterText)" } else { '' }
-    $help = " Up/Dn Navigate | Enter/K Stop | / Filter | S Sort | R Refresh | A Addrs | Q Quit$filterLabel"
-    Write-Line ($h - 1) $help $cTitle 'DarkBlue'
 }
 
 # -- Show All Addresses Popup -----------------------------------
@@ -449,11 +464,19 @@ function Show-Addresses($item) {
 }
 
 # -- Filter Input ------------------------------------------------
-function Enter-FilterMode {
+function Write-FilterBar {
     $w = [Console]::WindowWidth
     $h = [Console]::WindowHeight
+    $text = " Filter: $($script:filterText)_  (Enter=apply, Esc=cancel)"
+    $padded = $text
+    if ($padded.Length -lt $w) { $padded = $padded + (' ' * ($w - $padded.Length)) }
+    elseif ($padded.Length -gt $w) { $padded = $padded.Substring(0, $w) }
+    [Console]::SetCursorPosition(0, $h - 1)
+    [Console]::Write("$(Ansi $cFilter 'Black')$padded$cReset")
+}
 
-    Write-Line ($h - 1) " Filter: $($script:filterText)_  (Enter=apply, Esc=cancel)" $cFilter 'Black'
+function Enter-FilterMode {
+    Write-FilterBar
     [Console]::CursorVisible = $true
 
     while ($true) {
@@ -475,7 +498,7 @@ function Enter-FilterMode {
             }
         }
 
-        Write-Line ($h - 1) " Filter: $($script:filterText)_  (Enter=apply, Esc=cancel)" $cFilter 'Black'
+        Write-FilterBar
     }
 
     [Console]::CursorVisible = $false
@@ -521,7 +544,7 @@ function Show-Loading([string]$msg = 'Scanning network...') {
         if ($padded.Length -lt $w) { $padded = $padded + (' ' * ($w - $padded.Length)) }
         elseif ($padded.Length -gt $w) { $padded = $padded.Substring(0, $w) }
         [Console]::SetCursorPosition(0, $statusY)
-        Write-Host $padded -ForegroundColor Cyan -NoNewline
+        [Console]::Write("$(Ansi 'Cyan')$padded$cReset")
     }
 }
 
