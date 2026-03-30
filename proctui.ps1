@@ -1,3 +1,7 @@
+param(
+    [string]$Port = ''
+)
+
 # ================================================================
 #  ProcNet TUI - Active Processes & Network Addresses
 #  Run: powershell -ExecutionPolicy Bypass -File .\proctui.ps1
@@ -5,6 +9,46 @@
 # ================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
+
+# -- Enable ANSI/VT Processing ------------------------------------
+try {
+    Add-Type -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+'@ -Name 'Win32' -Namespace 'ConsoleVT' -ErrorAction SilentlyContinue
+    $h = [ConsoleVT.Win32]::GetStdHandle(-11)
+    $m = 0
+    [ConsoleVT.Win32]::GetConsoleMode($h, [ref]$m) | Out-Null
+    [ConsoleVT.Win32]::SetConsoleMode($h, ($m -bor 0x0004)) | Out-Null
+} catch {}
+
+$ESC = [char]0x1b
+$cReset = "$ESC[0m"
+
+$script:AnsiFg = @{
+    'Black'='30';'DarkRed'='31';'DarkGreen'='32';'DarkYellow'='33'
+    'DarkBlue'='34';'DarkMagenta'='35';'DarkCyan'='36';'Gray'='37'
+    'DarkGray'='90';'Red'='91';'Green'='92';'Yellow'='93'
+    'Blue'='94';'Magenta'='95';'Cyan'='96';'White'='97'
+}
+$script:AnsiBg = @{
+    'Black'='40';'DarkRed'='41';'DarkGreen'='42';'DarkYellow'='43'
+    'DarkBlue'='44';'DarkMagenta'='45';'DarkCyan'='46';'Gray'='47'
+    'DarkGray'='100';'Red'='101';'Green'='102';'Yellow'='103'
+    'Blue'='104';'Magenta'='105';'Cyan'='106';'White'='107'
+}
+
+function Ansi([string]$fg, [string]$bg = $null) {
+    $codes = @()
+    if ($fg -and $script:AnsiFg[$fg]) { $codes += $script:AnsiFg[$fg] }
+    if ($bg -and $script:AnsiBg[$bg]) { $codes += $script:AnsiBg[$bg] }
+    if ($codes.Count -eq 0) { return '' }
+    return "$ESC[$($codes -join ';')m"
+}
 
 # -- State -------------------------------------------------------
 $script:selectedIndex   = 0
