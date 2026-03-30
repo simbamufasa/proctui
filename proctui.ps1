@@ -85,8 +85,10 @@ $cDanger   = 'Red'
 $cHelp     = 'DarkYellow'
 $cFilter   = 'Magenta'
 
-# -- Gather Data -------------------------------------------------
-function Get-NetProcesses {
+# -- Gather Data (background-safe scriptblock) ------------------
+$script:fetchScript = {
+    $ErrorActionPreference = 'SilentlyContinue'
+
     $conns = Get-NetTCPConnection -ErrorAction SilentlyContinue |
         Where-Object { $_.OwningProcess -ne 0 } |
         Select-Object OwningProcess, LocalAddress, LocalPort, RemoteAddress, RemotePort, State
@@ -205,11 +207,17 @@ function Get-NetProcesses {
         }
     }
 
-    $prop = $script:sortColumn
+    return $results
+}
+
+# -- Sort/Filter on main thread ----------------------------------
+function Apply-SortFilter($rawData) {
+    $results = $rawData
+
     if ($script:sortAsc) {
-        $results = $results | Sort-Object -Property $prop
+        $results = $results | Sort-Object -Property $script:sortColumn
     } else {
-        $results = $results | Sort-Object -Property $prop -Descending
+        $results = $results | Sort-Object -Property $script:sortColumn -Descending
     }
 
     if ($script:filterText) {
@@ -236,7 +244,7 @@ function Get-NetProcesses {
         $results = $results | Where-Object { $_.State -eq 'Listen' }
     }
 
-    return $results
+    return @($results)
 }
 
 # -- Buffered Rendering ------------------------------------------
@@ -635,23 +643,38 @@ function Show-Loading([string]$msg = 'Scanning network...') {
     }
 }
 
-function Refresh-Data {
-    Show-Loading 'Scanning network connections...'
-    $result = @(Get-NetProcesses)
-    $script:lastRefresh = [datetime]::Now
-    return $result
+# -- Background Runspace Setup -----------------------------------
+$script:bgRunspace  = $null
+$script:bgPipeline  = $null
+$script:bgResult    = $null
+$script:bgRawData   = @()
+
+function Start-BackgroundFetch {
+    if ($script:bgResult) { return }
+    $script:bgPipeline = [PowerShell]::Create()
+    $script:bgPipeline.Runspace = $script:bgRunspace
+    [void]$script:bgPipeline.AddScript($script:fetchScript)
+    $script:bgResult = $script:bgPipeline.BeginInvoke()
 }
 
-# -- Re-sort cached data without re-fetching --------------------
-function Sort-CachedData($dataIn) {
-    $prop = $script:sortColumn
-    if ($script:sortAsc) {
-        $out = $dataIn | Sort-Object -Property $prop
-    } else {
-        $out = $dataIn | Sort-Object -Property $prop -Descending
+function Poll-BackgroundFetch {
+    if (-not $script:bgResult) { return $false }
+    if (-not $script:bgResult.IsCompleted) { return $false }
+
+    try {
+        $script:bgRawData = @($script:bgPipeline.EndInvoke($script:bgResult))
+    } catch {
+        $script:bgRawData = @()
     }
-    return @($out)
+    $script:bgPipeline.Dispose()
+    $script:bgPipeline = $null
+    $script:bgResult   = $null
+    $script:lastRefresh = [datetime]::Now
+    return $true
 }
+
+$script:bgRunspace = [runspacefactory]::CreateRunspace()
+$script:bgRunspace.Open()
 
 # -- Process Tree ------------------------------------------------
 function Get-ProcessTree([int]$rootPid) {
@@ -699,7 +722,9 @@ try {
     [Console]::Clear()  # one-time clear at startup
 
     Show-Loading 'Starting up...'
-    $data = Refresh-Data
+    $script:bgRawData = @(& $script:fetchScript)
+    $script:lastRefresh = [datetime]::Now
+    $data = Apply-SortFilter $script:bgRawData
 
     while ($true) {
         # Check for terminal resize
@@ -718,11 +743,15 @@ try {
             $script:dirty = $true
         }
 
-        # Auto-refresh data
-        if (([datetime]::Now - $script:lastRefresh).TotalSeconds -ge $script:refreshInterval) {
-            Show-Loading 'Auto-refreshing...'
-            $data = Refresh-Data
+        # Poll for completed background fetch
+        if (Poll-BackgroundFetch) {
+            $data = Apply-SortFilter $script:bgRawData
             $script:dirty = $true
+        }
+
+        # Schedule background fetch if due
+        if (([datetime]::Now - $script:lastRefresh).TotalSeconds -ge $script:refreshInterval) {
+            Start-BackgroundFetch
         }
 
         # Only draw if dirty
@@ -754,7 +783,9 @@ try {
                     $script:statusMsg  = "X Killed '$($sel.Name)' (PID $($sel.PID))"
                     $script:statusTime = [datetime]::Now
                     Start-Sleep -Milliseconds 300
-                    $data = Refresh-Data
+                    $script:bgRawData = @(& $script:fetchScript)
+                    $script:lastRefresh = [datetime]::Now
+                    $data = Apply-SortFilter $script:bgRawData
                 } catch {
                     $script:statusMsg  = "!! Failed: $($_.Exception.Message)"
                     $script:statusTime = [datetime]::Now
@@ -780,7 +811,9 @@ try {
                 }
                 $script:statusTime = [datetime]::Now
                 Start-Sleep -Milliseconds 300
-                $data = Refresh-Data
+                $script:bgRawData = @(& $script:fetchScript)
+                $script:lastRefresh = [datetime]::Now
+                $data = Apply-SortFilter $script:bgRawData
             }
             $script:confirmKill = $false
             continue
@@ -799,17 +832,21 @@ try {
                 switch ($key.KeyChar) {
                     'k' { if ($data.Count -gt 0) { $script:confirmKill = $true } }
                     'K' { if ($data.Count -gt 0) { $script:confirmKill = $true } }
-                    '/' { Enter-FilterMode; $data = Refresh-Data }
-                    's' { Cycle-Sort; $data = Sort-CachedData $data }
-                    'S' { Cycle-Sort; $data = Sort-CachedData $data }
-                    'r' { $data = Refresh-Data
+                    '/' { Enter-FilterMode; $data = Apply-SortFilter $script:bgRawData }
+                    's' { Cycle-Sort; $data = Apply-SortFilter $script:bgRawData }
+                    'S' { Cycle-Sort; $data = Apply-SortFilter $script:bgRawData }
+                    'r' { $script:bgRawData = @(& $script:fetchScript)
+                          $script:lastRefresh = [datetime]::Now
+                          $data = Apply-SortFilter $script:bgRawData
                           $script:statusMsg = "~ Refreshed"; $script:statusTime = [datetime]::Now }
-                    'R' { $data = Refresh-Data
+                    'R' { $script:bgRawData = @(& $script:fetchScript)
+                          $script:lastRefresh = [datetime]::Now
+                          $data = Apply-SortFilter $script:bgRawData
                           $script:statusMsg = "~ Refreshed"; $script:statusTime = [datetime]::Now }
                     'a' { if ($data.Count -gt 0) { Show-Addresses $data[$script:selectedIndex] } }
                     'A' { if ($data.Count -gt 0) { Show-Addresses $data[$script:selectedIndex] } }
-                    'p' { Enter-PortMode; $data = Refresh-Data }
-                    'P' { Enter-PortMode; $data = Refresh-Data }
+                    'p' { Enter-PortMode; $data = Apply-SortFilter $script:bgRawData }
+                    'P' { Enter-PortMode; $data = Apply-SortFilter $script:bgRawData }
                     'l' {
                         $script:listenView = -not $script:listenView
                         if ($script:listenView) {
@@ -826,7 +863,7 @@ try {
                         $script:statusTime = [datetime]::Now
                         $script:selectedIndex = 0
                         $script:scrollOffset = 0
-                        $data = Refresh-Data
+                        $data = Apply-SortFilter $script:bgRawData
                     }
                     'L' {
                         $script:listenView = -not $script:listenView
@@ -844,7 +881,7 @@ try {
                         $script:statusTime = [datetime]::Now
                         $script:selectedIndex = 0
                         $script:scrollOffset = 0
-                        $data = Refresh-Data
+                        $data = Apply-SortFilter $script:bgRawData
                     }
                     'q' { return }
                     'Q' { return }
@@ -862,6 +899,8 @@ catch {
     Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
 }
 finally {
+    if ($script:bgPipeline) { $script:bgPipeline.Dispose() }
+    if ($script:bgRunspace) { $script:bgRunspace.Dispose() }
     [Console]::CursorVisible = $true
     [Console]::ResetColor()
 }
