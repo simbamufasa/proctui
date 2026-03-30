@@ -646,6 +646,38 @@ function Sort-CachedData($dataIn) {
     return @($out)
 }
 
+# -- Process Tree ------------------------------------------------
+function Get-ProcessTree([int]$rootPid) {
+    $allProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+    $children = @{}
+    foreach ($p in $allProcs) {
+        if ($p.ParentProcessId) {
+            if (-not $children[$p.ParentProcessId]) {
+                $children[$p.ParentProcessId] = @()
+            }
+            $children[$p.ParentProcessId] += $p.ProcessId
+        }
+    }
+
+    $tree = @()
+    $queue = @($rootPid)
+    $visited = @{}
+    while ($queue.Count -gt 0) {
+        $current = $queue[0]
+        $queue = @($queue | Select-Object -Skip 1)
+        if ($visited[$current]) { continue }
+        $visited[$current] = $true
+        $tree += $current
+        if ($children[$current]) {
+            $queue += $children[$current]
+        }
+        if ($tree.Count -ge 50) { break }
+    }
+
+    [array]::Reverse($tree)
+    return $tree
+}
+
 # -- Main Loop ---------------------------------------------------
 try {
     $bw = [Console]::WindowWidth
@@ -720,6 +752,28 @@ try {
                     $script:statusMsg  = "!! Failed: $($_.Exception.Message)"
                     $script:statusTime = [datetime]::Now
                 }
+            }
+            elseif ($key.KeyChar -eq 't' -or $key.KeyChar -eq 'T') {
+                $sel = $data[$script:selectedIndex]
+                $tree = Get-ProcessTree $sel.PID
+                $killed = 0
+                $failed = 0
+                foreach ($pid in $tree) {
+                    try {
+                        Stop-Process -Id $pid -Force -ErrorAction Stop
+                        $killed++
+                    } catch {
+                        $failed++
+                    }
+                }
+                if ($failed -eq 0) {
+                    $script:statusMsg = "X Killed '$($sel.Name)' tree ($killed processes)"
+                } else {
+                    $script:statusMsg = "X Killed $killed/$($killed+$failed) in '$($sel.Name)' tree ($failed access denied)"
+                }
+                $script:statusTime = [datetime]::Now
+                Start-Sleep -Milliseconds 300
+                $data = Refresh-Data
             }
             $script:confirmKill = $false
             continue
