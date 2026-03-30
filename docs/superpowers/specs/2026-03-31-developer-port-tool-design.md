@@ -127,6 +127,79 @@ function Get-ProcessTree($pid) -> @(pid, child1, child2, grandchild1, ...)
 - Listen view stacks with text filter and port filter. All three can be active.
 - Example: Listen view ON + port filter 3000 = show only processes listening on port 3000
 
+## Rendering & Responsiveness Improvements
+
+These changes should be implemented before the features above, as they establish the rendering foundation everything else builds on.
+
+### 6. StringBuilder Buffered Rendering
+
+**Problem:** The current `Draw-Screen` makes ~90+ individual `Write-Host` calls per frame (2-3 per row for line + color overlays). Each call flushes to the console, causing visible micro-flicker.
+
+**Solution:** Build the entire frame as a single string using `[System.Text.StringBuilder]`, then write it in one `[Console]::Out.Write()` call.
+
+**Implementation:**
+- Replace all `Write-Host` calls in `Draw-Screen` with appends to a `StringBuilder`
+- Use ANSI escape sequences (`$([char]27)[38;5;...m`) for colors instead of `Write-Host -ForegroundColor`. This is required because `Write-Host` can't write to a buffer -- it goes directly to the console host.
+- Windows Terminal and modern PowerShell 5.1+ on Windows 10+ support ANSI escapes natively
+- At the end of `Draw-Screen`, position cursor at 0,0 and write the entire buffer in one call
+- Keep the `Write-Host` path as a fallback check: detect ANSI support via `$env:WT_SESSION` or `$PSVersionTable` and fall back to current rendering if ANSI is not supported (legacy conhost)
+
+**ANSI color map:**
+- Map existing `$cHeader`, `$cSelected`, etc. variables to ANSI escape codes
+- Define a helper: `function Ansi($fg, $bg)` that returns the escape sequence for a given color pair
+- `$cReset = "$([char]27)[0m"` to reset after each colored segment
+
+**Expected impact:** Eliminates flicker entirely. Single write per frame means the console never shows a partially-drawn state.
+
+### 7. Dirty Tracking (Skip Unnecessary Redraws)
+
+**Problem:** The main loop redraws the entire screen every 50ms iteration, even when nothing has changed -- no key pressed, no auto-refresh triggered.
+
+**Solution:** Track a `$script:dirty` flag. Only call `Draw-Screen` when something actually changed.
+
+**What sets dirty to `$true`:**
+- Any keypress (navigation, sort, filter, etc.)
+- Auto-refresh completing (new data loaded)
+- Window resize detected
+- Status message appearing or expiring
+
+**What keeps dirty `$false`:**
+- Idle loop iterations with no input and no refresh due
+
+**Implementation:**
+- Add `$script:dirty = $true` to state (start dirty for initial draw)
+- At the top of the main loop: `if (-not $script:dirty) { Start-Sleep -Milliseconds 50; continue }` (after checking for input)
+- Each key handler and data refresh sets `$script:dirty = $true`
+- `Draw-Screen` sets `$script:dirty = $false` after completing
+- Check `[Console]::WindowWidth/Height` each iteration; if changed from last frame, set dirty
+
+**Expected impact:** Reduces CPU usage from constant redrawing to event-driven rendering. The 50ms poll remains for input detection but skips the expensive draw path.
+
+### 8. Background Data Fetch
+
+**Problem:** `Get-NetProcesses` takes 200-500ms (WMI + network cmdlets). During this time, the UI is completely frozen -- no navigation, no key response.
+
+**Solution:** Run data collection in a background PowerShell runspace. The main thread stays responsive for input while data loads.
+
+**Implementation:**
+- Create a persistent runspace at startup via `[runspacefactory]::CreateRunspace()`
+- When a refresh is due, dispatch `Get-NetProcesses` logic to the runspace via `[PowerShell]::Create().AddScript(...).BeginInvoke()`
+- Main loop continues processing input and rendering the previous data set
+- Each loop iteration checks `$asyncResult.IsCompleted`; when true, swap in the new data and set dirty
+- Show a non-blocking spinner in the status bar: `~ Refreshing...` (replaces the current blocking `Show-Loading`)
+
+**Runspace lifecycle:**
+- Created once at startup, reused for all refreshes
+- The scriptblock passed to the runspace contains the data-fetching logic (network cmdlets + WMI)
+- Only one background fetch runs at a time; if a fetch is already in progress, skip scheduling a new one
+- On exit (`Q`), dispose the runspace cleanly in the `finally` block
+
+**Data handoff:**
+- The runspace returns an array of `[PSCustomObject]` -- same shape as current `Get-NetProcesses` output
+- Main thread receives it via `EndInvoke()`, applies current sort/filter, and sets dirty
+
+**Expected impact:** Navigation stays responsive at all times. The 200-500ms freeze is eliminated. User perceives instant key response even during data refresh.
+
 ## Help Bar Update
 
 ```
@@ -141,11 +214,23 @@ New state variables:
 - `$script:portFilter = ''` -- active port filter
 - `$script:listenView = $false` -- listen-only view toggle
 - `$script:prevSortColumn` / `$script:prevSortAsc` -- saved sort state when listen view activates
+- `$script:dirty = $true` -- whether the screen needs redrawing
+- `$script:lastWidth` / `$script:lastHeight` -- previous console dimensions for resize detection
+- `$script:runspace` -- persistent background runspace for data fetching
+- `$script:asyncResult` -- handle for in-flight background fetch
+- `$script:ansiSupported` -- whether to use ANSI rendering or Write-Host fallback
 
 Modified data model (per process):
 - `ParentPID` -- integer, parent process ID
 - `ParentName` -- string, parent process name
 - `CmdLine` -- string, full command line
+
+## Implementation Order
+
+1. Rendering improvements (6, 7, 8) -- foundation for everything else
+2. Data model changes (2: parent/cmdline) -- needed by tree kill
+3. Features (1, 3, 4, 5) -- can be built incrementally on top
+4. README update
 
 ## Files Modified
 
