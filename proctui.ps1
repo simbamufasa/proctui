@@ -102,6 +102,12 @@ function Get-NetProcesses {
         $grouped[$p].UDP += $u
     }
 
+    $cimProcs = @{}
+    try {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            ForEach-Object { $cimProcs[$_.ProcessId] = $_ }
+    } catch {}
+
     $results = @()
     foreach ($p in $grouped.Keys) {
         $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
@@ -162,6 +168,22 @@ function Get-NetProcesses {
                         elseif ($states['UDP'])     { 'UDP' }
                         else { $k = $states.Keys | Select-Object -First 1; if ($k) { $k } else { 'Unknown' } }
 
+        $cim = $cimProcs[$p]
+        $cmdLine = if ($cim -and $cim.CommandLine) {
+            $cim.CommandLine
+        } else { '' }
+        $parentPid = if ($cim) { $cim.ParentProcessId } else { 0 }
+        $parentName = '--'
+        if ($parentPid -and $parentPid -ne 0) {
+            $parentCim = $cimProcs[$parentPid]
+            if ($parentCim) {
+                $parentName = $parentCim.Name
+            } else {
+                $pp = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
+                if ($pp) { $parentName = $pp.ProcessName }
+            }
+        }
+
         $results += [PSCustomObject]@{
             PID         = $p
             Name        = $proc.ProcessName
@@ -171,6 +193,9 @@ function Get-NetProcesses {
             MemMB       = [math]::Round($proc.WorkingSet64 / 1MB, 1)
             Addresses   = $addrs
             TopAddr     = $topAddr
+            CmdLine     = $cmdLine
+            ParentPID   = $parentPid
+            ParentName  = $parentName
         }
     }
 
