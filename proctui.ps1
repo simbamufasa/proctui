@@ -65,6 +65,9 @@ $script:needsFullRedraw = $true
 $script:dirty          = $true
 $script:lastWidth      = 0
 $script:lastHeight     = 0
+$script:portFilter     = ''
+
+if ($Port) { $script:portFilter = $Port }
 
 # -- Colors ------------------------------------------------------
 $cHeader   = 'DarkCyan'
@@ -212,6 +215,17 @@ function Get-NetProcesses {
             $_.Name -like "*$ft*" -or
             "$($_.PID)" -like "*$ft*" -or
             ($_.Addresses -join ' ') -like "*$ft*"
+        }
+    }
+
+    if ($script:portFilter) {
+        $pf = $script:portFilter
+        $results = $results | Where-Object {
+            $match = $false
+            foreach ($a in $_.Addresses) {
+                if ($a -match ":$pf\b") { $match = $true; break }
+            }
+            $match
         }
     }
 
@@ -534,6 +548,44 @@ function Enter-FilterMode {
     $script:scrollOffset = 0
 }
 
+function Enter-PortMode {
+    $w = [Console]::WindowWidth
+    $h = [Console]::WindowHeight
+
+    $prompt = " Port: $($script:portFilter)_  (Enter=search, Esc=cancel)"
+    [Console]::SetCursorPosition(0, $h - 1)
+    [Console]::Write("$(Ansi $cFilter 'Black')$(Pad $prompt $w)$cReset")
+    [Console]::CursorVisible = $true
+
+    while ($true) {
+        $key = [Console]::ReadKey($true)
+
+        if ($key.Key -eq 'Enter') { break }
+        elseif ($key.Key -eq 'Escape') {
+            $script:portFilter = ''
+            break
+        }
+        elseif ($key.Key -eq 'Backspace') {
+            if ($script:portFilter.Length -gt 0) {
+                $script:portFilter = $script:portFilter.Substring(0, $script:portFilter.Length - 1)
+            }
+        }
+        else {
+            if ($key.KeyChar -match '[0-9]') {
+                $script:portFilter += $key.KeyChar
+            }
+        }
+
+        $prompt = " Port: $($script:portFilter)_  (Enter=search, Esc=cancel)"
+        [Console]::SetCursorPosition(0, $h - 1)
+        [Console]::Write("$(Ansi $cFilter 'Black')$(Pad $prompt $w)$cReset")
+    }
+
+    [Console]::CursorVisible = $false
+    $script:selectedIndex = 0
+    $script:scrollOffset = 0
+}
+
 # -- Cycle Sort --------------------------------------------------
 function Cycle-Sort {
     $columns = @('PID', 'Name', 'Connections', 'State', 'CPU', 'MemMB')
@@ -695,6 +747,8 @@ try {
                           $script:statusMsg = "~ Refreshed"; $script:statusTime = [datetime]::Now }
                     'a' { if ($data.Count -gt 0) { Show-Addresses $data[$script:selectedIndex] } }
                     'A' { if ($data.Count -gt 0) { Show-Addresses $data[$script:selectedIndex] } }
+                    'p' { Enter-PortMode; $data = Refresh-Data }
+                    'P' { Enter-PortMode; $data = Refresh-Data }
                     'q' { return }
                     'Q' { return }
                 }
