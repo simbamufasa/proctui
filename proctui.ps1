@@ -66,6 +66,9 @@ $script:dirty          = $true
 $script:lastWidth      = 0
 $script:lastHeight     = 0
 $script:portFilter     = ''
+$script:listenView     = $false
+$script:prevSortColumn = 'PID'
+$script:prevSortAsc    = $true
 
 if ($Port) { $script:portFilter = $Port }
 
@@ -227,6 +230,10 @@ function Get-NetProcesses {
             }
             $match
         }
+    }
+
+    if ($script:listenView) {
+        $results = $results | Where-Object { $_.State -eq 'Listen' }
     }
 
     return $results
@@ -803,6 +810,42 @@ try {
                     'A' { if ($data.Count -gt 0) { Show-Addresses $data[$script:selectedIndex] } }
                     'p' { Enter-PortMode; $data = Refresh-Data }
                     'P' { Enter-PortMode; $data = Refresh-Data }
+                    'l' {
+                        $script:listenView = -not $script:listenView
+                        if ($script:listenView) {
+                            $script:prevSortColumn = $script:sortColumn
+                            $script:prevSortAsc    = $script:sortAsc
+                            $script:sortColumn     = 'PID'
+                            $script:sortAsc        = $true
+                            $script:statusMsg      = "View: Listeners only"
+                        } else {
+                            $script:sortColumn = $script:prevSortColumn
+                            $script:sortAsc    = $script:prevSortAsc
+                            $script:statusMsg  = "View: All processes"
+                        }
+                        $script:statusTime = [datetime]::Now
+                        $script:selectedIndex = 0
+                        $script:scrollOffset = 0
+                        $data = Refresh-Data
+                    }
+                    'L' {
+                        $script:listenView = -not $script:listenView
+                        if ($script:listenView) {
+                            $script:prevSortColumn = $script:sortColumn
+                            $script:prevSortAsc    = $script:sortAsc
+                            $script:sortColumn     = 'PID'
+                            $script:sortAsc        = $true
+                            $script:statusMsg      = "View: Listeners only"
+                        } else {
+                            $script:sortColumn = $script:prevSortColumn
+                            $script:sortAsc    = $script:prevSortAsc
+                            $script:statusMsg  = "View: All processes"
+                        }
+                        $script:statusTime = [datetime]::Now
+                        $script:selectedIndex = 0
+                        $script:scrollOffset = 0
+                        $data = Refresh-Data
+                    }
                     'q' { return }
                     'Q' { return }
                 }
