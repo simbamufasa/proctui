@@ -1,0 +1,18 @@
+# Claude Code
+.claude/
+.claude*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# PowerShell
+*.ps1xml
