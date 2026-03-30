@@ -62,6 +62,9 @@ $script:statusTime      = [datetime]::MinValue
 $script:lastRefresh     = [datetime]::MinValue
 $script:refreshInterval = 3
 $script:needsFullRedraw = $true
+$script:dirty          = $true
+$script:lastWidth      = 0
+$script:lastHeight     = 0
 
 # -- Colors ------------------------------------------------------
 $cHeader   = 'DarkCyan'
@@ -583,13 +586,34 @@ try {
     $data = Refresh-Data
 
     while ($true) {
+        # Check for terminal resize
+        $curW = [Console]::WindowWidth
+        $curH = [Console]::WindowHeight
+        if ($curW -ne $script:lastWidth -or $curH -ne $script:lastHeight) {
+            $script:lastWidth = $curW
+            $script:lastHeight = $curH
+            $script:dirty = $true
+            try { [Console]::BufferWidth = $curW } catch {}
+        }
+
+        # Check if status message just expired
+        if ($script:statusMsg -and ([datetime]::Now - $script:statusTime).TotalSeconds -ge 4) {
+            $script:statusMsg = ''
+            $script:dirty = $true
+        }
+
         # Auto-refresh data
         if (([datetime]::Now - $script:lastRefresh).TotalSeconds -ge $script:refreshInterval) {
             Show-Loading 'Auto-refreshing...'
             $data = Refresh-Data
+            $script:dirty = $true
         }
 
-        Draw-Screen $data
+        # Only draw if dirty
+        if ($script:dirty) {
+            Draw-Screen $data
+            $script:dirty = $false
+        }
 
         # Poll for input - tight loop for responsiveness
         if (-not [Console]::KeyAvailable) {
@@ -598,6 +622,7 @@ try {
         }
 
         $key = [Console]::ReadKey($true)
+        $script:dirty = $true
 
         # Drain buffered keys for rapid navigation
         while ([Console]::KeyAvailable -and ($key.Key -eq 'UpArrow' -or $key.Key -eq 'DownArrow')) {
