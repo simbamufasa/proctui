@@ -88,7 +88,8 @@ if ($Command -eq 'update') {
         Write-Host "  Failed to reach GitHub: $($_.Exception.Message)`n" -ForegroundColor Red
         exit 1
     }
-    $current = Get-Content $ScriptDest -Raw
+    $current = (Get-Content $ScriptDest -Raw) -replace "`r`n", "`n"
+    $latest  = $latest -replace "`r`n", "`n"
     if ($current -eq $latest) {
         Write-Host "  Already up to date.`n" -ForegroundColor Green
         exit 0
