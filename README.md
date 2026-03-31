@@ -95,6 +95,14 @@ proctui
 powershell -ExecutionPolicy Bypass -File .\proctui.ps1
 ```
 
+### Update
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\update.ps1
+```
+
+Downloads the latest version from GitHub and replaces your installed copy. A backup of the previous version is saved automatically. Use `-Check` to see if an update is available without installing it.
+
 ### Uninstall
 
 ```powershell
