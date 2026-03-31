@@ -1,27 +1,48 @@
 # ProcNet TUI
 
-A terminal-based process monitor for Windows that shows **only processes with active network connections** -- their ports, remote peers, protocol states, CPU, and memory usage. Built entirely in PowerShell with no external dependencies.
+A developer-first port debugging tool for Windows. Find what's hogging a port, see what spawned it, and kill it -- all without leaving the terminal.
 
 ![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D6)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+## The Problem
+
+You're a developer. You run `npm start` and get:
+
 ```
-  [*] ProcNet TUI -- 24 network processes                    14:32:07
+Error: listen EADDRINUSE: address already in use :::3000
+```
+
+Now what? Open Task Manager? Run `netstat -ano | findstr :3000` and decode the output? Manually cross-reference PIDs with `tasklist`? Hope you kill the right thing?
+
+And even when you find and kill it, sometimes it comes right back -- because you killed the child process, not the parent (like `nodemon`) that respawned it.
+
+## The Solution
+
+```
+proctui 3000
+```
+
+That's it. Instantly see what's on port 3000, who spawned it, and kill the whole process tree with one keystroke.
+
+```
+  [*] ProcNet TUI -- 3 network processes                     14:32:07
 
   PID     PROCESS              CONN  STATE          CPU(s)  MEM(MB)  CMD
   -------------------------------------------------------------------------
-   1284   chrome               42    Established     312.4   1024.3  chrome.exe --type=...
-   5920   node                  8    Listen           45.2    256.8  node ./src/server.js
-   7344   svchost              12    Established       2.1     18.4  C:\Windows\system32\...
-    892   spotify               3    Established      18.7    198.2  Spotify.exe --type=...
+   8820   node                  3    Listen           12.4    128.3  node ./src/server.js
+   7104   nodemon               1    Established       2.1     64.2  nodemon --watch src...
+   9012   node                  1    Listen            0.8     92.1  node ./worker.js
   =========================================================================
-  >> chrome (PID 1284) -- 42 connection(s)  |  Parent: explorer (PID 5520)
-     TCP 0.0.0.0:443 -> 142.250.80.46:443 (Established)
-     TCP 0.0.0.0:443 -> 142.250.80.78:443 (Established)
+  >> node (PID 8820) -- 3 connection(s)  |  Parent: nodemon (PID 7104)
+     TCP 0.0.0.0:3000 -> * (Listen)
+     TCP 127.0.0.1:3000 -> 127.0.0.1:52431 (Established)
 
   Up/Dn Navigate | Enter/K Stop | / Filter | P Port | L Listen | S Sort | R Refresh | A Addrs | Q Quit
 ```
+
+Select `nodemon`, press `K`, then `T` for tree kill -- nodemon and all its children are gone. Port 3000 is yours again.
 
 ## Features
 
