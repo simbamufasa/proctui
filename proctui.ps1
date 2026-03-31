@@ -88,14 +88,15 @@ if ($Command -eq 'update') {
         Write-Host "  Failed to reach GitHub: $($_.Exception.Message)`n" -ForegroundColor Red
         exit 1
     }
-    $current = (Get-Content $ScriptDest -Raw) -replace "`r`n", "`n"
-    $latest  = $latest -replace "`r`n", "`n"
-    if ($current -eq $latest) {
+    $currentNorm = ((Get-Content $ScriptDest -Raw) -replace "`r`n", "`n").TrimStart([char]0xFEFF).Trim()
+    $latestNorm  = ($latest -replace "`r`n", "`n").TrimStart([char]0xFEFF).Trim()
+    if ($currentNorm -eq $latestNorm) {
         Write-Host "  Already up to date.`n" -ForegroundColor Green
         exit 0
     }
     Copy-Item $ScriptDest "$ScriptDest.bak" -Force
-    $latest | Set-Content $ScriptDest -Encoding UTF8
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($ScriptDest, $latest, $utf8NoBom)
     Write-Host "  Updated successfully. Previous version backed up.`n" -ForegroundColor Green
     exit 0
 }
