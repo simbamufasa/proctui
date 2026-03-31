@@ -1,5 +1,5 @@
 param(
-    [string]$Port = ''
+    [string]$Command = ''
 )
 
 # ================================================================
@@ -70,7 +70,59 @@ $script:prevSortColumn = 'PID'
 $script:prevSortAsc    = $true
 $script:protectedProcs = @('csrss','lsass','smss','wininit','services','svchost','winlogon','System')
 
-if ($Port) { $script:portFilter = $Port }
+# -- Command Routing -----------------------------------------------
+if ($Command -eq 'update') {
+    $ErrorActionPreference = 'Stop'
+    $RepoUrl    = 'https://raw.githubusercontent.com/simbamufasa/proctui/main/proctui.ps1'
+    $InstallDir = Join-Path $env:USERPROFILE '.proctui'
+    $ScriptDest = Join-Path $InstallDir 'proctui.ps1'
+
+    Write-Host "`n  Checking for updates..." -ForegroundColor Cyan
+    if (-not (Test-Path $ScriptDest)) {
+        Write-Host "  Not installed. Run install.ps1 first.`n" -ForegroundColor Red
+        exit 1
+    }
+    try {
+        $latest = (New-Object System.Net.WebClient).DownloadString($RepoUrl)
+    } catch {
+        Write-Host "  Failed to reach GitHub: $($_.Exception.Message)`n" -ForegroundColor Red
+        exit 1
+    }
+    $current = Get-Content $ScriptDest -Raw
+    if ($current -eq $latest) {
+        Write-Host "  Already up to date.`n" -ForegroundColor Green
+        exit 0
+    }
+    Copy-Item $ScriptDest "$ScriptDest.bak" -Force
+    $latest | Set-Content $ScriptDest -Encoding UTF8
+    Write-Host "  Updated successfully. Previous version backed up.`n" -ForegroundColor Green
+    exit 0
+}
+elseif ($Command -eq 'version') {
+    Write-Host "ProcNet TUI v1.0.0"
+    exit 0
+}
+elseif ($Command -eq 'help') {
+    Write-Host ""
+    Write-Host "  ProcNet TUI - Developer port debugging tool" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Usage:" -ForegroundColor White
+    Write-Host "    proctui              Launch the TUI" -ForegroundColor Gray
+    Write-Host "    proctui 3000         Launch filtered to port 3000" -ForegroundColor Gray
+    Write-Host "    proctui update       Update to latest version" -ForegroundColor Gray
+    Write-Host "    proctui version      Show version" -ForegroundColor Gray
+    Write-Host "    proctui help         Show this help" -ForegroundColor Gray
+    Write-Host ""
+    exit 0
+}
+elseif ($Command -match '^\d+$') {
+    $script:portFilter = $Command
+}
+elseif ($Command -ne '') {
+    Write-Host "  Unknown command: $Command" -ForegroundColor Red
+    Write-Host "  Run 'proctui help' for usage.`n" -ForegroundColor Gray
+    exit 1
+}
 
 # -- Colors ------------------------------------------------------
 $cHeader   = 'DarkCyan'

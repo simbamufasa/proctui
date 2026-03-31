@@ -97,11 +97,11 @@ powershell -ExecutionPolicy Bypass -File .\proctui.ps1
 
 ### Update
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\update.ps1
+```
+proctui update
 ```
 
-Downloads the latest version from GitHub and replaces your installed copy. A backup of the previous version is saved automatically. Use `-Check` to see if an update is available without installing it.
+Downloads the latest version from GitHub and replaces your installed copy. A backup of the previous version is saved automatically.
 
 ### Uninstall
 
@@ -114,8 +114,11 @@ Removes the installed script, launchers, Start Menu shortcut, and PATH entry.
 ## Usage
 
 ```
-proctui
-proctui 3000
+proctui              Launch the TUI
+proctui 3000         Launch filtered to port 3000
+proctui update       Update to latest version
+proctui version      Show version
+proctui help         Show help
 ```
 
 ### Keyboard Controls
