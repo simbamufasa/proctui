@@ -51,7 +51,7 @@ A terminal-based process monitor for Windows that shows **only processes with ac
 ### Quick install (recommended)
 
 ```powershell
-git clone https://github.com/your-username/proctui.git
+git clone https://github.com/simbamufasa/proctui.git
 cd proctui
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```

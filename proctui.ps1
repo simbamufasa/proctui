@@ -68,6 +68,7 @@ $script:portFilter     = ''
 $script:listenView     = $false
 $script:prevSortColumn = 'PID'
 $script:prevSortAsc    = $true
+$script:protectedProcs = @('csrss','lsass','smss','wininit','services','svchost','winlogon','System')
 
 if ($Port) { $script:portFilter = $Port }
 
@@ -777,6 +778,18 @@ try {
         if ($script:confirmKill) {
             $sel = $data[$script:selectedIndex]
             if (-not $sel) { $script:confirmKill = $false; continue }
+            if ($script:protectedProcs -contains $sel.Name) {
+                $script:statusMsg  = "!! Cannot kill protected system process '$($sel.Name)'"
+                $script:statusTime = [datetime]::Now
+                $script:confirmKill = $false
+                continue
+            }
+            if ($sel.PID -eq $PID) {
+                $script:statusMsg  = "!! Cannot kill own process"
+                $script:statusTime = [datetime]::Now
+                $script:confirmKill = $false
+                continue
+            }
             if ($key.KeyChar -eq 'y' -or $key.KeyChar -eq 'Y') {
                 try {
                     Stop-Process -Id $sel.PID -Force -ErrorAction Stop
@@ -795,9 +808,14 @@ try {
                 $tree = Get-ProcessTree $sel.PID
                 $killed = 0
                 $failed = 0
-                foreach ($pid in $tree) {
+                $skipped = 0
+                foreach ($tpid in $tree) {
+                    $tp = Get-Process -Id $tpid -ErrorAction SilentlyContinue
+                    if ($tp -and ($script:protectedProcs -contains $tp.ProcessName -or $tpid -eq $PID)) {
+                        $skipped++; continue
+                    }
                     try {
-                        Stop-Process -Id $pid -Force -ErrorAction Stop
+                        Stop-Process -Id $tpid -Force -ErrorAction Stop
                         $killed++
                     } catch {
                         $failed++
