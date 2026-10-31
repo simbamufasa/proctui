@@ -17,3 +17,6 @@ Desktop.ini
 
 # PowerShell
 *.ps1xml
+
+# Workspace per-project bookkeeping
+.workspace/
